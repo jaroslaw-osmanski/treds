@@ -109,9 +109,13 @@ public:
 
     Matrix* const _this = data->_this;
     const size_t i = data->i;
-    const size_t j = data->j;
-    for (size_t k = 0; k < data->b.get_y(); ++k) {
-      _this->at(i, j) += data->a.at(k, j) * data->b.at(i, k);
+
+    for(size_t j = 0; j < _this->get_y(); ++j) {
+      size_t sum = 0;
+      for (size_t k = 0; k < data->b.get_y(); ++k) {
+        sum += data->a.at(k, j) * data->b.at(i, k);
+      }
+      _this->at(i, j) = sum;
     }
     return 0;
   }
@@ -122,9 +126,10 @@ public:
       return 0;
     }
     Matrix* c = new MatrixThreaded(b.get_x(), a.get_y());
-    static const size_t THREAD_NUM = 16;
+    static const size_t THREAD_NUM = 8;
     pthread_t threads[THREAD_NUM];
-    MultiplyData* data[THREAD_NUM];
+    MultiplyData prototype(c, a, b, 0, 0, 0);
+    std::vector<MultiplyData> data(THREAD_NUM, prototype);
     std::vector<size_t> threads_indexes;
     std::vector<size_t> threads_available;
     pthread_attr_t attr;
@@ -139,25 +144,23 @@ public:
 
 
     for(size_t i = 0; i < x; ++i) {
-      for(size_t j = 0; j < y; ++j) {
         if(threads_indexes.size() >= THREAD_NUM) {
           pthread_join(threads[threads_indexes[0]], &status);
-          delete data[threads_indexes[0]];
           threads_available.push_back(threads_indexes[0]);
           threads_indexes.erase(threads_indexes.begin());
         }
 
         size_t t_index = threads_available[0];
         threads_available.erase(threads_available.begin());
-        data[t_index] = new MultiplyData(c, a, b, i, j, t_index);
+        data[t_index].i = i;
+        data[t_index].j = 0;
+        data[t_index].thread_index = t_index;
         pthread_create(&threads[t_index],
-             &attr, multiply_thread_fun, (void*) data[t_index]);
+             &attr, multiply_thread_fun, (void*) &data.data()[t_index]);
         threads_indexes.push_back(t_index);
-      }
     }
     for (size_t in_t = 0; in_t < threads_indexes.size(); ++in_t) {
       pthread_join(threads[threads_indexes[in_t]], &status);
-      delete data[threads_indexes[in_t]];
     }
 
     pthread_attr_destroy(&attr);
