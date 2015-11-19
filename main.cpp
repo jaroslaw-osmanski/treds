@@ -104,7 +104,15 @@ public:
     size_t thread_index;
   };
 
-  static void* multiply_thread_fun(void */*multiply_data*/) {
+  static void* multiply_thread_fun(void *multiply_data) {
+    MultiplyData* data = static_cast<MultiplyData*>(multiply_data);
+
+    Matrix* const _this = data->_this;
+    const size_t i = data->i;
+    const size_t j = data->j;
+    for (size_t k = 0; k < data->b.get_y(); ++k) {
+      _this->at(i, j) += data->a.at(k, j) * data->b.at(i, k);
+    }
     return 0;
   }
 
@@ -114,7 +122,7 @@ public:
       return 0;
     }
     Matrix* c = new MatrixThreaded(b.get_x(), a.get_y());
-    static const size_t THREAD_NUM = 1;
+    static const size_t THREAD_NUM = 16;
     pthread_t threads[THREAD_NUM];
     MultiplyData* data[THREAD_NUM];
     std::vector<size_t> threads_indexes;
@@ -131,7 +139,7 @@ public:
 
 
     for(size_t i = 0; i < x; ++i) {
-      for (size_t j = 0; j < y; ++j) {
+      for(size_t j = 0; j < y; ++j) {
         if(threads_indexes.size() >= THREAD_NUM) {
           pthread_join(threads[threads_indexes[0]], &status);
           delete data[threads_indexes[0]];
@@ -141,19 +149,18 @@ public:
 
         size_t t_index = threads_available[0];
         threads_available.erase(threads_available.begin());
-        data[t_index] = new MultiplyData(this, a, b, i, j, t_index);
-        MultiplyData* d = data[t_index];
+        data[t_index] = new MultiplyData(c, a, b, i, j, t_index);
         pthread_create(&threads[t_index],
-             &attr, multiply_thread_fun, (void*) &d);
+             &attr, multiply_thread_fun, (void*) data[t_index]);
+        threads_indexes.push_back(t_index);
       }
     }
-    for (size_t in_t; in_t <= threads_indexes.size(); ++in_t) {
+    for (size_t in_t = 0; in_t < threads_indexes.size(); ++in_t) {
       pthread_join(threads[threads_indexes[in_t]], &status);
       delete data[threads_indexes[in_t]];
     }
 
     pthread_attr_destroy(&attr);
-    pthread_exit(NULL);
 
     return c;
   }
@@ -164,11 +171,24 @@ public:
 
 };
 
+TEST(MatrixThreaded, SmallTest) {
+  const size_t SIZE = 16;
+  MatrixThreaded a(SIZE, SIZE);
+  MatrixThreaded b(SIZE, SIZE);
 
-TEST(Matrix, Large1024Test) {
+  for (size_t i = 0; i < SIZE; ++i) {
+    for (size_t j = 0; j < SIZE; ++j) {
+      a.at(i,j) = (i + j) % 1024;
+      b.at(i,j) = (i - j) % 1024;
+    }
+  }
+  std::unique_ptr<Matrix> c(a.multiply(a, b));
+}
+
+TEST(MatrixThreaded, Large1024Test) {
   const size_t SIZE = 1024;
   MatrixThreaded a(SIZE, SIZE);
-  Matrix b(SIZE, SIZE);
+  MatrixThreaded b(SIZE, SIZE);
 
   for (size_t i = 0; i < SIZE; ++i) {
     for (size_t j = 0; j < SIZE; ++j) {
@@ -180,7 +200,7 @@ TEST(Matrix, Large1024Test) {
 }
 
 
-TEST(MatrixThreaded, Large1024Test) {
+TEST(MatrixNotThreaded, Large1024Test) {
   const size_t SIZE = 1024;
   Matrix a(SIZE, SIZE);
   Matrix b(SIZE, SIZE);
