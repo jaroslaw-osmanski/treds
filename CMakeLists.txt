@@ -27,6 +27,6 @@ set_target_properties(gtestl PROPERTIES
 include_directories("${source_dir}/include")
 
 
-ADD_DEFINITIONS ( -Wall -pedantic -Wextra -Werror --std=c++11 -pg -g )
+ADD_DEFINITIONS ( -Wall -pedantic -Wextra -Werror --std=c++11 -pg -O3)
 add_executable (threds main.cpp)
 target_link_libraries(threds    gtestl pthread)

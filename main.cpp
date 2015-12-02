@@ -3,8 +3,10 @@
 #include <functional>
 #include <memory>
 #include <vector>
+#include <queue>
 
 #include <pthread.h>
+#include <unistd.h>
 #include "gtest/gtest.h"
 
 class Matrix
@@ -92,33 +94,94 @@ public:
 
     MultiplyData(Matrix* _this,
         const Matrix& a, const Matrix& b,
-        size_t i, size_t j, size_t thread_index) :
-       _this(_this), a(a), b(b), i(i), j(j), thread_index(thread_index) {
+        size_t start, size_t end, size_t thread_index) :
+       _this(_this), a(a), b(b), start(start), end(end), thread_index(thread_index), is_finished(0) {
     }
 
     Matrix* _this;
     const Matrix& a;
     const Matrix& b;
-    size_t i;
-    size_t j;
+    size_t start;
+    size_t end;
     size_t thread_index;
+    volatile bool is_finished;
   };
 
   static void* multiply_thread_fun(void *multiply_data) {
     MultiplyData* data = static_cast<MultiplyData*>(multiply_data);
 
     Matrix* const _this = data->_this;
-    const size_t i = data->i;
 
-    for(size_t j = 0; j < _this->get_y(); ++j) {
-      size_t sum = 0;
-      for (size_t k = 0; k < data->b.get_y(); ++k) {
-        sum += data->a.at(k, j) * data->b.at(i, k);
+    for (size_t i = data->start; i < data->end; ++i) {
+
+      for(size_t j = 0; j < _this->get_y(); ++j) {
+        unsigned int sum = 0;
+        for (size_t k = 0; k < data->b.get_y(); ++k) {
+          sum += data->a.at(k, j) * data->b.at(i, k);
+        }
+        _this->at(i, j) = sum;
       }
-      _this->at(i, j) = sum;
+
     }
+    data->is_finished = 1;
     return 0;
   }
+
+  template<size_t i, size_t to>
+  struct For {
+    static const size_t found = 1;
+  };
+
+  template<size_t to>
+  struct For<to,to> {
+    static const size_t found = to;
+  };
+
+
+
+  template<size_t THREADS>
+  struct Manager {
+    Manager() : threads_available(0), ALL((1 << THREADS) - 1)
+    {
+      for(size_t t_i = 0; t_i < THREADS; ++t_i) {
+        threads_available += (1 << t_i);
+      }
+    }
+
+    void republish(size_t index) {
+      threads_available += (1 << index);
+
+    }
+
+    int join() {
+      for(size_t t_i = 0; t_i < THREADS; ++t_i) {
+        if (!(threads_available & (1 << t_i))) {
+          threads_available += (1 << t_i);
+          return t_i;
+        }
+      }
+      return THREADS;
+    }
+    int select() {
+      for(size_t t_i = 0; t_i < THREADS; ++t_i) {
+        if (threads_available & (1 << t_i)) {
+          threads_available -= (1 << t_i);
+          return t_i;
+        }
+      }
+      return THREADS;
+    }
+
+    int is_any_thread_used() {
+      return threads_available != ALL;
+    }
+    int full() {
+      return threads_available == 0;
+    }
+
+    int threads_available;
+    const int ALL;
+  };
 
   virtual Matrix* multiply(const Matrix& a, const Matrix& b)
   {
@@ -126,41 +189,44 @@ public:
       return 0;
     }
     Matrix* c = new MatrixThreaded(b.get_x(), a.get_y());
-    static const size_t THREAD_NUM = 8;
+    static const size_t THREAD_NUM = 4;
     pthread_t threads[THREAD_NUM];
+    Manager<THREAD_NUM> manager;
     MultiplyData prototype(c, a, b, 0, 0, 0);
     std::vector<MultiplyData> data(THREAD_NUM, prototype);
-    std::vector<size_t> threads_indexes;
-    std::vector<size_t> threads_available;
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
     void *status;
-//    int rc;
-
-    for(size_t t_i = 0; t_i < THREAD_NUM; ++t_i) {
-      threads_available.push_back(t_i);
-    }
 
 
-    for(size_t i = 0; i < x; ++i) {
-        if(threads_indexes.size() >= THREAD_NUM) {
-          pthread_join(threads[threads_indexes[0]], &status);
-          threads_available.push_back(threads_indexes[0]);
-          threads_indexes.erase(threads_indexes.begin());
+
+    for(size_t i = 0; i < x; ) {
+        for (size_t i = 0; i < THREAD_NUM; ++i) {
+          if(data[i].is_finished) {
+            pthread_join(threads[i], &status);
+            manager.republish(i);
+            data[i].is_finished = 0;
+          }
         }
+        if(!manager.full()) {
 
-        size_t t_index = threads_available[0];
-        threads_available.erase(threads_available.begin());
-        data[t_index].i = i;
-        data[t_index].j = 0;
+        size_t t_index = manager.select();
+        data[t_index].start = i;
+        data[t_index].end = (i + 100 < x) ? i + 100 : x;
         data[t_index].thread_index = t_index;
+        data[t_index].is_finished = 0;
+
         pthread_create(&threads[t_index],
              &attr, multiply_thread_fun, (void*) &data.data()[t_index]);
-        threads_indexes.push_back(t_index);
+        i = i + 100;
+        } else {
+          usleep(100);
+        }
     }
-    for (size_t in_t = 0; in_t < threads_indexes.size(); ++in_t) {
-      pthread_join(threads[threads_indexes[in_t]], &status);
+    while(manager.is_any_thread_used()) {
+      size_t thread_index = manager.join();
+      pthread_join(threads[thread_index], &status);
     }
 
     pthread_attr_destroy(&attr);
@@ -189,7 +255,7 @@ TEST(MatrixThreaded, SmallTest) {
 }
 
 TEST(MatrixThreaded, Large1024Test) {
-  const size_t SIZE = 1024;
+  const size_t SIZE = 5024;
   MatrixThreaded a(SIZE, SIZE);
   MatrixThreaded b(SIZE, SIZE);
 
@@ -204,7 +270,7 @@ TEST(MatrixThreaded, Large1024Test) {
 
 
 TEST(MatrixNotThreaded, Large1024Test) {
-  const size_t SIZE = 1024;
+  const size_t SIZE = 5024;
   Matrix a(SIZE, SIZE);
   Matrix b(SIZE, SIZE);
 
