@@ -29,4 +29,5 @@ include_directories("${source_dir}/include")
 
 ADD_DEFINITIONS ( -Wall -pedantic -Wextra -Werror --std=c++11 -pg -O3)
 add_executable (threds main.cpp)
+add_dependencies(threds gtest)
 target_link_libraries(threds    gtestl pthread)
